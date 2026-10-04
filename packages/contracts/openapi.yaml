@@ -1,50 +1,139 @@
 openapi: 3.0.3
-info: { title: Waver Flags, version: 1.0.0 }
+info:
+  title: Waver Flags
+  version: 1.0.0
+  description: >-
+    Boolean flags with OFREP evaluation. App clients use /ofrep/* with a
+    Bearer API key. Admin endpoints under /api/* need a Bearer JWT from
+    /api/v1/auth/login. Full UI at /docs.
+servers:
+  - url: /
+    description: This server
 paths:
   /api/v1/auth/login:
     post:
-      requestBody: { content: { application/json: { schema: { type: object, required: [password], properties: { password: { type: string } } } } } }
-      responses: { '200': { description: jwt }, '403': { description: MUST_CHANGE } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password:
+                  type: string
+      responses:
+        '200':
+          description: jwt
+        '403':
+          description: MUST_CHANGE
   /api/v1/auth/change-password:
     post:
-      requestBody: { content: { application/json: { schema: { type: object, required: [current, next], properties: { current: { type: string }, next: { type: string, minLength: 12 } } } } }
-      responses: { '200': { description: ok } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current, next]
+              properties:
+                current:
+                  type: string
+                next:
+                  type: string
+                  minLength: 12
+      responses:
+        '200':
+          description: ok
   /api/v1/flags:
-    get: { responses: { '200': { description: list } } }
+    get:
+      responses:
+        '200':
+          description: list
     post:
-      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Flag' } } } }
-      responses: { '201': { description: created } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Flag'
+      responses:
+        '201':
+          description: created
   /ofrep/v1/evaluate/flags/{key}:
     post:
-      parameters: [{ name: key, in: path, required: true, schema: { type: string } }]
-      requestBody: { content: { application/json: { schema: { type: object, required: [context], properties: { context: { type: object } } } } } }
-      responses: { '200': { description: OFREP single } }
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [context]
+              properties:
+                context:
+                  type: object
+      responses:
+        '200':
+          description: OFREP single
   /ofrep/v1/evaluate/flags:
     post:
-      requestBody: { content: { application/json: { schema: { type: object, required: [context], properties: { context: { type: object } } } } } }
-      responses: { '200': { description: OFREP bulk } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [context]
+              properties:
+                context:
+                  type: object
+      responses:
+        '200':
+          description: OFREP bulk
 components:
   schemas:
     Flag:
       type: object
       required: [key, name]
       properties:
-        key: { type: string, pattern: '^[a-z0-9][a-z0-9\-_.]*$' }
-        name: { type: string }
-        description: { type: string }
-        enabled: { type: boolean }
-        default_value: { type: boolean }
+        key:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9\-_.]*$'
+        name:
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+        default_value:
+          type: boolean
         rules:
           type: array
           items:
             type: object
             required: [id, attr, op, values, value, rollout_pct]
             properties:
-              id: { type: string }
-              attr: { type: string }
-              op: { type: string, enum: [eq, ne, in, not_in, contains, starts_with, ends_with, gt, lt, semver_eq] }
-              values: { type: array, items: { type: string } }
-              value: { type: boolean }
-              rollout_pct: { type: integer, minimum: 0, maximum: 100 }
-        starts_at: { type: integer, description: UTC unix seconds }
-        ends_at: { type: integer, description: UTC unix seconds }
+              id:
+                type: string
+              attr:
+                type: string
+              op:
+                type: string
+                enum: [eq, ne, in, not_in, contains, starts_with, ends_with, gt, lt, semver_eq]
+              values:
+                type: array
+                items:
+                  type: string
+              value:
+                type: boolean
+              rollout_pct:
+                type: integer
+                minimum: 0
+                maximum: 100
+        starts_at:
+          type: integer
+          description: UTC unix seconds
+        ends_at:
+          type: integer
+          description: UTC unix seconds
