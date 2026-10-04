@@ -1,0 +1,18 @@
+services:
+  waver:
+    build: .
+    image: waver:latest
+    ports:
+      - "${PORT:-8080}:${PORT:-8080}"
+    env_file:
+      - .env
+    environment:
+      # Compose values win over env_file. DB must live on the volume.
+      DB_PATH: /data/waver.db
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+    volumes:
+      - waver-data:/data
+    restart: unless-stopped
+
+volumes:
+  waver-data:
