@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 WORKDIR /app
 COPY --from=api /server /app/server
 COPY apps/api/migrations /app/migrations
+COPY packages/contracts /app/contracts
 COPY --from=web /repo/apps/web/dist /app/web/dist
 # Defaults only. Compose injects real values (see docker-compose.yml).
 ENV PORT=8080 DB_PATH=/data/waver.db

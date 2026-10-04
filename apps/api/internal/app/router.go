@@ -12,6 +12,7 @@ import (
 	"github.com/daffadon/waver/internal/iam"
 	"github.com/daffadon/waver/internal/ofrep"
 	"github.com/daffadon/waver/internal/shared"
+	"github.com/swaggest/swgui/v5emb"
 )
 
 // Router wires admin API, OFREP, and static web dist from disk.
@@ -64,6 +65,13 @@ func Router(cfg shared.Config, iamH *iam.Handler, flagH *flag.Handler, ofrepH *o
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		shared.WriteJSON(w, 200, map[string]string{"status": "ok"})
 	})
+
+	// Public client reference: raw contract plus Swagger UI.
+	mux.HandleFunc("/docs/openapi.yaml", serveSpec)
+	mux.HandleFunc("/docs", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/docs/", http.StatusFound)
+	})
+	mux.Handle("/docs/", v5emb.New("Waver Flags", "/docs/openapi.yaml", "/docs/"))
 
 	dist := findDist()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
