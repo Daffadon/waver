@@ -64,6 +64,15 @@ curl -X POST localhost:8080/ofrep/v1/evaluate/flags/<key> \
 Bulk evaluation: `POST /ofrep/v1/evaluate/flags` with the same body.
 Revoking a key rejects evaluation immediately.
 
+## Contracts
+
+`packages/contracts/openapi.yaml` is enforced, not decoration.
+`go test ./...` in `apps/api` probes every documented route and fails on
+undocumented or unimplemented ones. Update both sides together.
+
+Live reference for clients: Swagger UI at `/docs`, raw file at
+`/docs/openapi.yaml`. Both public, no auth. Try OFREP calls there.
+
 ## Run in Docker
 
 Set `JWT_SECRET` in root `.env` first, then:
