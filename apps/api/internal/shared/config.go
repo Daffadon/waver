@@ -12,6 +12,7 @@ import (
 // Config holds runtime settings. Env wins.
 type Config struct {
 	Port      string
+	TCPPort   string
 	DBPath    string
 	JWTSecret string
 }
@@ -19,9 +20,10 @@ type Config struct {
 func LoadConfig() Config {
 	loadRootEnv()
 	port := getenv("PORT", "8080")
+	tcpPort := getenv("TCP_PORT", "9090")
 	db := getenv("DB_PATH", "./data/waver.db")
 	secret := os.Getenv("JWT_SECRET")
-	return Config{Port: port, DBPath: db, JWTSecret: secret}
+	return Config{Port: port, TCPPort: tcpPort, DBPath: db, JWTSecret: secret}
 }
 
 // loadRootEnv reads KEY=VALUE lines from the repo-root .env.

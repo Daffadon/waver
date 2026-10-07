@@ -4,6 +4,7 @@ services:
     image: waver:latest
     ports:
       - "${PORT:-8080}:${PORT:-8080}"
+      - "${TCP_PORT:-9090}:${TCP_PORT:-9090}"
     env_file:
       - .env
     environment:
