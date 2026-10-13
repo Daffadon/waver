@@ -2,37 +2,49 @@ package tcp
 
 import (
 	"bufio"
-	"database/sql"
+	"bytes"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"strings"
-	"time"
-
-	"github.com/daffadon/waver/internal/flag"
-	"github.com/daffadon/waver/internal/iam"
 )
 
-// Server serves flag eval over raw TCP. JSON lines: one line in, one line out.
-// Web stays on HTTP; this is for direct SDK clients that want no HTTP overhead.
+// Server serves the whole HTTP API over raw TCP. JSON lines: one line in, one line out.
+// Every line becomes an http.Request run through the same router as HTTP, so auth,
+// validation and error strings never drift.
 //
 //	{"type":"ping"} -> {"status":"ok"} (no auth)
+//
+// Eval is sugar for OFREP, auth by API key:
+//
 //	{"api_key":"wv_...","key":"my-flag","context":{"targetingKey":"u1"}} -> single
 //	{"api_key":"wv_...","context":{"targetingKey":"u1"}} -> bulk (no key)
 //
-// Errors are {"error":"..."} with the same strings as HTTP OFREP.
-// ponytail: no TLS, plain LAN only. Add TLS or token rotation when traffic leaves VPC.
-// ponytail: 1MB line cap, raise if contexts grow large.
+// Any other route passes method/path/body straight through:
+//
+//	{"method":"GET","path":"/api/v1/flags","token":"<jwt>"}
+//	{"method":"POST","path":"/api/v1/flags","token":"<jwt>","body":{...}}
+//
+// token is the admin JWT for /api/v1/*; api_key is the key for /ofrep/*.
+//
+// ponytail: admin JWT and login passwords now cross plaintext TCP. Keep TCP on a
+// trusted LAN; add TLS or disable admin routes on TCP before this leaves the VPC.
+// ponytail: 1MB line cap, raise if bodies grow large.
 type Server struct {
-	Flags *flag.Store
-	Keys  *iam.Store
+	Handler http.Handler
 }
 
 type request struct {
-	Type    string         `json:"type"`
-	APIKey  string         `json:"api_key"`
-	Key     string         `json:"key"`
-	Context map[string]any `json:"context"`
+	Type    string          `json:"type"`
+	Method  string          `json:"method"`
+	Path    string          `json:"path"`
+	Token   string          `json:"token"`
+	APIKey  string          `json:"api_key"`
+	Key     string          `json:"key"`
+	Context map[string]any  `json:"context"`
+	Body    json.RawMessage `json:"body"`
 }
 
 // Serve listens on :port. One goroutine per conn. Blocks.
@@ -84,42 +96,66 @@ func (s *Server) handleLine(line []byte) any {
 	if in.Type == "ping" {
 		return map[string]string{"status": "ok"}
 	}
-	if !s.Keys.ValidKey(in.APIKey) {
-		return map[string]string{"error": "bad api key"}
+	method, path, body, bearer := route(in)
+	req, err := http.NewRequest(method, path, body)
+	if err != nil {
+		return map[string]string{"error": "bad request"}
 	}
-	if in.Context == nil || in.Context["targetingKey"] == nil {
-		return map[string]string{"error": "context.targetingKey required"}
+	req.Header.Set("Content-Type", "application/json")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	if in.Key != "" {
-		return s.single(in.Key, in.Context)
-	}
-	return s.bulk(in.Context)
+	rec := &recorder{header: http.Header{}, code: http.StatusOK}
+	s.Handler.ServeHTTP(rec, req)
+	return rec.result()
 }
 
-func (s *Server) single(key string, ctx map[string]any) any {
-	f, err := s.Flags.Get(key)
-	if err == sql.ErrNoRows {
-		return map[string]any{"key": key, "errorCode": "FLAG_NOT_FOUND", "errorDetails": "flag not found"}
+// route maps a line to an HTTP request path. The old eval shapes are sugar
+// for the OFREP endpoints.
+func route(in request) (method, path string, body io.Reader, bearer string) {
+	if in.Path == "" {
+		b, _ := json.Marshal(map[string]any{"context": in.Context})
+		if in.Key != "" {
+			return http.MethodPost, "/ofrep/v1/evaluate/flags/" + in.Key, bytes.NewReader(b), in.APIKey
+		}
+		return http.MethodPost, "/ofrep/v1/evaluate/flags", bytes.NewReader(b), in.APIKey
 	}
-	if err != nil {
-		return map[string]string{"error": "db error"}
+	method = in.Method
+	if method == "" {
+		method = http.MethodGet
 	}
-	res := f.Eval(ctx, time.Now().UTC())
-	return map[string]any{"key": key, "value": res.Value, "reason": res.Reason, "variant": res.Variant}
+	if len(in.Body) > 0 && string(in.Body) != "null" {
+		body = bytes.NewReader(in.Body)
+	}
+	return method, in.Path, body, firstNonEmpty(in.Token, in.APIKey)
 }
 
-func (s *Server) bulk(ctx map[string]any) any {
-	flags, err := s.Flags.List()
-	if err != nil {
-		return map[string]string{"error": "db error"}
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
 	}
-	now := time.Now().UTC()
-	out := make([]any, 0, len(flags))
-	for _, f := range flags {
-		res := f.Eval(ctx, now)
-		out = append(out, map[string]any{"key": f.Key, "value": res.Value, "reason": res.Reason, "variant": res.Variant})
+	return b
+}
+
+// recorder captures a handler response so the body can go back down the line.
+type recorder struct {
+	header http.Header
+	code   int
+	buf    bytes.Buffer
+}
+
+func (r *recorder) Header() http.Header         { return r.header }
+func (r *recorder) WriteHeader(code int)        { r.code = code }
+func (r *recorder) Write(b []byte) (int, error) { return r.buf.Write(b) }
+
+// result returns the handler body verbatim when it is JSON, so eval and error
+// payloads match HTTP exactly. Non-JSON (static files, docs) is wrapped.
+func (r *recorder) result() any {
+	b := bytes.TrimSpace(r.buf.Bytes())
+	if len(b) > 0 && json.Valid(b) {
+		return json.RawMessage(b)
 	}
-	return map[string]any{"flags": out, "metadata": map[string]string{"version": "v1"}}
+	return map[string]any{"status": r.code, "body": r.buf.String()}
 }
 
 func writeJSON(w *bufio.Writer, v any) error {

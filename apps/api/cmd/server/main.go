@@ -37,7 +37,8 @@ func main() {
 	iamH := &iam.Handler{Store: iamStore, Cfg: cfg}
 	flagH := &flag.Handler{Store: &flag.Store{DB: db}}
 	ofrepH := &ofrep.Handler{Flags: &flag.Store{DB: db}, Keys: iamStore}
-	tcpSrv := &tcp.Server{Flags: &flag.Store{DB: db}, Keys: iamStore}
+	router := app.Router(cfg, iamH, flagH, ofrepH)
+	tcpSrv := &tcp.Server{Handler: router}
 
 	go func() {
 		if err := tcpSrv.Serve(cfg.TCPPort); err != nil {
@@ -47,7 +48,7 @@ func main() {
 	}()
 
 	slog.Info("listening", "port", cfg.Port, "tcp", cfg.TCPPort, "db", cfg.DBPath)
-	if err := http.ListenAndServe(":"+cfg.Port, app.Router(cfg, iamH, flagH, ofrepH)); err != nil {
+	if err := http.ListenAndServe(":"+cfg.Port, router); err != nil {
 		slog.Error("server stopped", "err", err)
 		os.Exit(1)
 	}
