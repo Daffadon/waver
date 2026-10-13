@@ -29,16 +29,11 @@ export const authRepo = {
 export const flagRepo = {
   list: () => req<{ flags: Flag[] }>('/api/v1/flags'),
   create: (f: Omit<Flag, 'version' | 'updated_at'>) =>
-    req<Flag>('/api/v1/flags', { method: 'POST', body: JSON.stringify(toUtcPayload(f)) }),
+    req<Flag>('/api/v1/flags', { method: 'POST', body: JSON.stringify(f) }),
   update: (key: string, f: Omit<Flag, 'version' | 'updated_at'>) =>
-    req<Flag>(`/api/v1/flags/${key}`, { method: 'PATCH', body: JSON.stringify(toUtcPayload(f)) }),
+    req<Flag>(`/api/v1/flags/${key}`, { method: 'PATCH', body: JSON.stringify(f) }),
   remove: (key: string) => req<{ status: string }>(`/api/v1/flags/${key}`, { method: 'DELETE' }),
 };
-
-// Forms use datetime-local (local) -> convert to UTC unix seconds.
-export function toUtcPayload(f: Omit<Flag, 'version' | 'updated_at'>) {
-  return f;
-}
 
 export function datetimeLocalToUnix(s: string | undefined): number | null {
   if (!s) return null;

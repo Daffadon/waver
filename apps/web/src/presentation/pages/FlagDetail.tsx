@@ -1,21 +1,23 @@
-/* eslint-disable react/incompatible-library -- no React Compiler in this app; watch() is the sanctioned RHF subscription */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useForm } from "react-hook-form";
 import { Button } from "@astryxdesign/core/Button";
-import { Stack } from "@astryxdesign/core/Stack";
-import { Text } from "@astryxdesign/core/Text";
-import { Heading } from "@astryxdesign/core/Heading";
-import { TextInput } from "@astryxdesign/core/TextInput";
-import { TextArea } from "@astryxdesign/core/TextArea";
-import { Switch } from "@astryxdesign/core/Switch";
 import { Banner } from "@astryxdesign/core/Banner";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Heading } from "@astryxdesign/core/Heading";
+import { MetadataList, MetadataListItem } from "@astryxdesign/core/MetadataList";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Switch } from "@astryxdesign/core/Switch";
+import { Text } from "@astryxdesign/core/Text";
+import { TextArea } from "@astryxdesign/core/TextArea";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/Stack";
+import { useToast } from "@astryxdesign/core/Toast";
 import { flagSchema, type Flag } from "../../domain/types";
 import { datetimeLocalToUnix, unixToDatetimeLocal } from "../../data/client";
 import { useFlagMutations, useFlags } from "../../app/hooks";
-import { Page } from "../components/Page";
+import { Page, PageHeader } from "../components/Page";
 
-type Form = {
+type Draft = {
   key: string;
   name: string;
   description: string;
@@ -26,160 +28,289 @@ type Form = {
   rulesJson: string;
 };
 
+type DraftField = keyof Draft;
+
 // Prefilled for new flags. First match wins. Delete what you do not need.
 const exampleRules = [
   { id: "pro-users", attr: "plan", op: "eq", values: ["pro"], value: true, rollout_pct: 100 },
   { id: "free-beta", attr: "plan", op: "eq", values: ["free"], value: true, rollout_pct: 10 },
 ];
 
-export function FlagDetail() {
-  const { key } = useParams();
-  const nav = useNavigate();
-  const isNew = !key || key === "new";
-  const { data } = useFlags();
-  const { create, update } = useFlagMutations();
-  const existing = data?.flags.find((f) => f.key === key);
-  const [err, setErr] = useState("");
+const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const updatedFmt = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-  const { register, handleSubmit, setValue, watch, formState } = useForm<Form>({
-    defaultValues: {
-      key: existing?.key ?? "",
-      name: existing?.name ?? "",
-      description: existing?.description ?? "",
-      enabled: existing?.enabled ?? true,
-      default_value: existing?.default_value ?? false,
-      starts: unixToDatetimeLocal(existing?.starts_at),
-      ends: unixToDatetimeLocal(existing?.ends_at),
-      rulesJson: JSON.stringify(existing?.rules ?? (isNew ? exampleRules : []), null, 2),
-    },
+function draftFrom(flag: Flag): Draft {
+  return {
+    key: flag.key,
+    name: flag.name,
+    description: flag.description,
+    enabled: flag.enabled,
+    default_value: flag.default_value,
+    starts: unixToDatetimeLocal(flag.starts_at),
+    ends: unixToDatetimeLocal(flag.ends_at),
+    rulesJson: JSON.stringify(flag.rules, null, 2),
+  };
+}
+
+const newDraft: Draft = {
+  key: "",
+  name: "",
+  description: "",
+  enabled: true,
+  default_value: false,
+  starts: "",
+  ends: "",
+  rulesJson: JSON.stringify(exampleRules, null, 2),
+};
+
+// validate is the single source of truth for the form: field errors plus the
+// parsed payload, so Save stays a two-branch call.
+function validate(draft: Draft, routeKey: string | undefined) {
+  const errors: Partial<Record<DraftField, string>> = {};
+  let payload: Omit<Flag, "version" | "updated_at"> | null = null;
+
+  let rules: unknown = [];
+  try {
+    rules = JSON.parse(draft.rulesJson || "[]");
+  } catch {
+    errors.rulesJson = "Not valid JSON";
+  }
+  if (draft.starts && datetimeLocalToUnix(draft.starts) == null) {
+    errors.starts = "Use YYYY-MM-DDTHH:MM";
+  }
+  if (draft.ends && datetimeLocalToUnix(draft.ends) == null) {
+    errors.ends = "Use YYYY-MM-DDTHH:MM";
+  }
+
+  const parsed = flagSchema.safeParse({
+    key: routeKey ?? draft.key,
+    name: draft.name,
+    description: draft.description,
+    enabled: draft.enabled,
+    default_value: draft.default_value,
+    rules: errors.rulesJson ? [] : rules,
+    starts_at: datetimeLocalToUnix(draft.starts),
+    ends_at: datetimeLocalToUnix(draft.ends),
   });
+  if (parsed.success) payload = parsed.data;
 
-  async function onSubmit(v: Form) {
-    setErr("");
-    let rules: Flag["rules"];
-    try {
-      rules = JSON.parse(v.rulesJson || "[]");
-    } catch {
-      setErr("rules must be valid JSON array");
-      return;
+  // Root-level refinements (schedule order) have no field to attach to.
+  let formError = "";
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) {
+      const path = issue.path[0];
+      if (path === "rules") {
+        errors.rulesJson = errors.rulesJson ?? issue.message;
+      } else if (typeof path === "string" && path in draft) {
+        errors[path as DraftField] = errors[path as DraftField] ?? issue.message;
+      } else {
+        formError = issue.message;
+      }
     }
-    const parsed = flagSchema.safeParse({
-      key: isNew ? v.key : key,
-      name: v.name,
-      description: v.description,
-      enabled: v.enabled,
-      default_value: v.default_value,
-      rules,
-      starts_at: datetimeLocalToUnix(v.starts),
-      ends_at: datetimeLocalToUnix(v.ends),
-    });
-    if (!parsed.success) {
-      setErr(parsed.error.errors[0]?.message ?? "validation failed");
-      return;
-    }
-    const payload = {
-      ...parsed.data,
-      description: parsed.data.description ?? "",
-      rules: parsed.data.rules ?? [],
-    };
+  }
+  return { errors, payload, formError };
+}
+
+function FlagForm({
+  routeKey,
+  existing,
+}: {
+  routeKey?: string;
+  existing?: Flag;
+}) {
+  const nav = useNavigate();
+  const showToast = useToast();
+  const { create, update } = useFlagMutations();
+  const isNew = !existing;
+  const [draft, setDraft] = useState<Draft>(() => (existing ? draftFrom(existing) : newDraft));
+  const [submitted, setSubmitted] = useState(false);
+
+  const { errors, payload, formError } = useMemo(
+    () => validate(draft, existing ? routeKey : undefined),
+    [draft, existing, routeKey],
+  );
+
+  function set<K extends DraftField>(field: K, value: Draft[K]) {
+    setDraft((d) => ({ ...d, [field]: value }));
+  }
+
+  const status = (field: DraftField) =>
+    submitted && errors[field] ? { type: "error" as const, message: errors[field]! } : undefined;
+
+  async function save() {
+    setSubmitted(true);
+    if (!payload) return;
     try {
-      if (isNew) await create.mutateAsync(payload as Omit<Flag, "version" | "updated_at">);
-      else
-        await update.mutateAsync({
-          key: key!,
-          flag: payload as Omit<Flag, "version" | "updated_at">,
-        });
+      if (isNew) await create.mutateAsync(payload);
+      else await update.mutateAsync({ key: routeKey!, flag: payload });
+      showToast({ body: isNew ? `Created ${payload.key}` : `Saved ${routeKey}` });
       nav("/");
     } catch (e) {
-      setErr((e as Error).message);
+      showToast({ body: (e as Error).message, type: "error" });
     }
   }
 
   return (
     <Page>
-      <Heading level={1}>{isNew ? "New flag" : `Flag ${key}`}</Heading>
-      {err && <Banner status="error" title={err} />}
-      <Stack gap={3} maxWidth={560}>
+      <PageHeader
+        title={isNew ? "New flag" : `Flag ${routeKey}`}
+        description={
+          existing
+            ? `v${existing.version} · updated ${updatedFmt.format(new Date(existing.updated_at * 1000))}`
+            : "Boolean plus optional attr rules, schedule, and rollout."
+        }
+        actions={<Button label="Back to flags" onClick={() => nav("/")} />}
+      />
+      {submitted && formError && (
+        <Banner status="error" title="Flag not saved" description={formError} />
+      )}
+      {existing && (
+        <MetadataList columns={2} label={{ position: "start", width: 96 }}>
+          <MetadataListItem label="Key">{existing.key}</MetadataListItem>
+          <MetadataListItem label="Rules">{String(existing.rules.length)}</MetadataListItem>
+          <MetadataListItem label="Starts">
+            {existing.starts_at ? updatedFmt.format(new Date(existing.starts_at * 1000)) : "—"}
+          </MetadataListItem>
+          <MetadataListItem label="Ends">
+            {existing.ends_at ? updatedFmt.format(new Date(existing.ends_at * 1000)) : "—"}
+          </MetadataListItem>
+        </MetadataList>
+      )}
+
+      <VStack gap={3} maxWidth={560}>
+        <Heading level={2}>Basics</Heading>
         {isNew && (
           <TextInput
             label="Key"
-            value={watch("key")}
-            onChange={(s) => setValue("key", s)}
+            value={draft.key}
+            onChange={(v) => set("key", v)}
             isRequired
             width="100%"
             placeholder="new-checkout"
+            description="Lowercase, [a-z0-9-_.], immutable once created."
+            status={status("key")}
           />
         )}
         <TextInput
           label="Name"
-          value={watch("name")}
-          onChange={(s) => setValue("name", s)}
+          value={draft.name}
+          onChange={(v) => set("name", v)}
           isRequired
           width="100%"
+          status={status("name")}
         />
         <TextInput
           label="Description"
-          value={watch("description")}
-          onChange={(s) => setValue("description", s)}
+          value={draft.description}
+          onChange={(v) => set("description", v)}
           isOptional
           width="100%"
+          status={status("description")}
         />
-      </Stack>
-      <Stack gap={3} maxWidth={560}>
+      </VStack>
+
+      <VStack gap={3} maxWidth={560}>
+        <Heading level={2}>Switch</Heading>
         <Switch
           label="Enabled (kill switch)"
-          value={watch("enabled")}
-          onChange={(b) => setValue("enabled", b)}
+          value={draft.enabled}
+          onChange={(v) => set("enabled", v)}
         />
         <Switch
-          label="Default value"
-          value={watch("default_value")}
-          onChange={(b) => setValue("default_value", b)}
+          label="Default value when no rule matches"
+          value={draft.default_value}
+          onChange={(v) => set("default_value", v)}
         />
-      </Stack>
-      <Stack gap={3} maxWidth={560}>
+      </VStack>
+
+      <VStack gap={3} maxWidth={560}>
+        <Heading level={2}>Schedule</Heading>
+        <Text type="supporting">
+          Your local time ({timeZone}); stored as UTC. Outside this window the flag serves its
+          default.
+        </Text>
         <TextInput
-          label="Starts at UTC (optional)"
-          type="text"
-          value={watch("starts")}
-          onChange={(s) => setValue("starts", s)}
+          label="Starts at"
+          value={draft.starts}
+          onChange={(v) => set("starts", v)}
           isOptional
           width="100%"
           placeholder="2026-01-01T00:00"
+          status={status("starts")}
         />
         <TextInput
-          label="Ends at UTC (optional)"
-          type="text"
-          value={watch("ends")}
-          onChange={(s) => setValue("ends", s)}
+          label="Ends at"
+          value={draft.ends}
+          onChange={(v) => set("ends", v)}
           isOptional
           width="100%"
           placeholder="2026-12-31T23:59"
+          status={status("ends")}
         />
-      </Stack>
-      <Stack gap={2}>
+      </VStack>
+
+      <VStack gap={2}>
+        <Heading level={2}>Rules</Heading>
         <TextArea
           label="Rules JSON"
-          value={watch("rulesJson")}
-          onChange={(s) => setValue("rulesJson", s)}
+          value={draft.rulesJson}
+          onChange={(v) => set("rulesJson", v)}
           rows={14}
+          status={status("rulesJson")}
         />
         <Text type="supporting">
           First match wins. Keep ids unique. rollout_pct 0-100 is sticky per targetingKey. Ops: eq
           ne in not_in contains starts_with ends_with gt lt semver_eq.
         </Text>
-      </Stack>
-      <Stack gap={2} maxWidth={560}>
+      </VStack>
+
+      <VStack gap={2} maxWidth={560}>
         <Button
           label="Save flag"
           variant="primary"
           width="100%"
           isLoading={create.isPending || update.isPending}
-          onClick={handleSubmit(onSubmit)}
+          clickAction={save}
         />
-      </Stack>
-      {formState.errors.name && <Text>{formState.errors.name.message}</Text>}
-      <input type="hidden" {...register("name")} />
+        <Button label="Cancel" variant="ghost" width="100%" onClick={() => nav("/")} />
+      </VStack>
     </Page>
+  );
+}
+
+export function FlagDetail() {
+  const { key } = useParams();
+  const nav = useNavigate();
+  const { data, isLoading } = useFlags();
+  const existing = data?.flags.find((f) => f.key === key);
+  const routeKey = key === "new" ? undefined : key;
+
+  if (!routeKey) return <FlagForm />;
+
+  if (!existing && isLoading) {
+    return (
+      <Page>
+        <Skeleton height={32} width={280} radius={2} />
+        <Skeleton height={220} radius={2} />
+      </Page>
+    );
+  }
+
+  if (!existing) {
+    return (
+      <Page>
+        <EmptyState
+          title={`No flag named ${routeKey}`}
+          description="It may have been deleted. Pick a flag from the list."
+          actions={<Button label="Back to flags" variant="primary" onClick={() => nav("/")} />}
+        />
+      </Page>
+    );
+  }
+
+  // Remount on load and on every server-side change, so the form never holds
+  // pre-load defaults over real data.
+  return (
+    <FlagForm key={`${existing.key}:${existing.updated_at}`} routeKey={routeKey} existing={existing} />
   );
 }

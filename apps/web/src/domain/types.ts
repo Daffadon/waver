@@ -35,7 +35,7 @@ export const flagSchema = z
     ends_at: z.number().int().nullable().optional(),
   })
   .refine((v) => v.starts_at == null || v.ends_at == null || v.starts_at <= v.ends_at, {
-    message: "starts_at must be <= ends_at (UTC)",
+    message: "schedule end must come after its start",
   });
 
 export const loginSchema = z.object({ password: z.string().min(1) });

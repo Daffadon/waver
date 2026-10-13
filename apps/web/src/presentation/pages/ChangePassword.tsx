@@ -48,8 +48,10 @@ export function ChangePassword() {
         type="password"
         value={next}
         onChange={setNext}
+        onEnter={submit}
         isRequired
         width="100%"
+        description="Min 12 chars."
       />
       <Stack gap={2} paddingBlockStart={2}>
         <Button label="Save new password" variant="primary" width="100%" onClick={submit} />
