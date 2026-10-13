@@ -6,6 +6,9 @@ info:
     Boolean flags with OFREP evaluation. App clients use /ofrep/* with a
     Bearer API key. Admin endpoints under /api/* need a Bearer JWT from
     /api/v1/auth/login. Full UI at /docs.
+    Nodes replicate flags with each other over the TCP port, newest clock wins;
+    every response carries the node's revision, and a caller can fence a read
+    with X-Waver-Min-Rev.
 servers:
   - url: /
     description: This server
@@ -48,15 +51,54 @@ paths:
       responses:
         '200':
           description: list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  flags:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Flag'
     post:
       requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Flag'
+              $ref: '#/components/schemas/FlagWrite'
       responses:
         '201':
           description: created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flag'
+        '409':
+          description: version did not match the current revision
+  /api/v1/flags/{key}:
+    patch:
+      parameters:
+        - $ref: '#/components/parameters/FlagKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FlagWrite'
+      responses:
+        '200':
+          description: updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flag'
+        '409':
+          description: version did not match the current revision
+    delete:
+      parameters:
+        - $ref: '#/components/parameters/FlagKey'
+      responses:
+        '200':
+          description: deleted
   /ofrep/v1/evaluate/flags/{key}:
     post:
       parameters:
@@ -65,6 +107,7 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: '#/components/parameters/MinRevision'
       requestBody:
         content:
           application/json:
@@ -77,8 +120,14 @@ paths:
       responses:
         '200':
           description: OFREP single
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Evaluation'
   /ofrep/v1/evaluate/flags:
     post:
+      parameters:
+        - $ref: '#/components/parameters/MinRevision'
       requestBody:
         content:
           application/json:
@@ -91,8 +140,90 @@ paths:
       responses:
         '200':
           description: OFREP bulk
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  flags:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Evaluation'
+                  metadata:
+                    $ref: '#/components/schemas/Metadata'
+  /healthz:
+    get:
+      responses:
+        '200':
+          description: liveness plus replication state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  node:
+                    type: string
+                    description: This node's identity.
+                  revision:
+                    type: integer
+                    description: Sum of every flag clock; identical on converged nodes.
+                  flags:
+                    type: integer
+                  peers:
+                    type: array
+                    items:
+                      type: string
 components:
+  parameters:
+    FlagKey:
+      name: key
+      in: path
+      required: true
+      schema:
+        type: string
+    MinRevision:
+      name: X-Waver-Min-Rev
+      in: header
+      required: false
+      schema:
+        type: integer
+      description: >-
+        Minimum revision the caller accepts. A node behind it pulls from its
+        peers first, then answers with whatever it has once the wait is up.
   schemas:
+    Metadata:
+      type: object
+      properties:
+        version:
+          type: string
+        revision:
+          type: integer
+          description: Node revision to send back as X-Waver-Min-Rev.
+    Evaluation:
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          type: boolean
+        reason:
+          type: string
+        variant:
+          type: string
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+    FlagWrite:
+      allOf:
+        - $ref: '#/components/schemas/Flag'
+        - type: object
+          properties:
+            version:
+              type: integer
+              description: >-
+                Revision the editor loaded. Omit for last-writer-wins; send it to
+                get a 409 instead of overwriting a newer change from another node.
     Flag:
       type: object
       required: [key, name]
@@ -136,4 +267,12 @@ components:
           description: UTC unix seconds
         ends_at:
           type: integer
+          description: UTC unix seconds
+        version:
+          type: integer
+          readOnly: true
+          description: This flag's revision, the winning clock.
+        updated_at:
+          type: integer
+          readOnly: true
           description: UTC unix seconds

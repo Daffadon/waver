@@ -15,8 +15,16 @@ import (
 	"github.com/swaggest/swgui/v5emb"
 )
 
+// NodeStatus is what /healthz reports about this node: who it is, how far its
+// state has come, and who it replicates with.
+type NodeStatus struct {
+	Node  string
+	Peers []string
+	Store *flag.Store
+}
+
 // Router wires admin API, OFREP, and static web dist from disk.
-func Router(cfg shared.Config, iamH *iam.Handler, flagH *flag.Handler, ofrepH *ofrep.Handler) http.Handler {
+func Router(cfg shared.Config, iamH *iam.Handler, flagH *flag.Handler, ofrepH *ofrep.Handler, node NodeStatus) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/v1/auth/login", iamH.Login)
@@ -63,7 +71,12 @@ func Router(cfg shared.Config, iamH *iam.Handler, flagH *flag.Handler, ofrepH *o
 	mux.HandleFunc("/ofrep/v1/evaluate/flags", ofrepH.Bulk)
 	mux.HandleFunc("/ofrep/v1/evaluate/flags/", ofrepH.Single)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		shared.WriteJSON(w, 200, map[string]string{"status": "ok"})
+		peers := node.Peers
+		if peers == nil {
+			peers = []string{}
+		}
+		shared.WriteJSON(w, 200, map[string]any{"status": "ok", "node": node.Node,
+			"revision": node.Store.Revision(), "flags": node.Store.Len(), "peers": peers})
 	})
 
 	// Public client reference: raw contract plus Swagger UI.

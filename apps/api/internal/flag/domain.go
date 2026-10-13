@@ -33,8 +33,10 @@ type Flag struct {
 	Rules        []Rule `json:"rules"`
 	StartsAt     *int64 `json:"starts_at,omitempty"`
 	EndsAt       *int64 `json:"ends_at,omitempty"`
-	Version      int    `json:"version"`
-	UpdatedAt    int64  `json:"updated_at"`
+	// Version is this flag's revision: the winning Lamport clock. It is what a
+	// client sends back to save with a conflict check.
+	Version   int64 `json:"version"`
+	UpdatedAt int64 `json:"updated_at"`
 }
 
 // Result is the OFREP evaluation outcome.

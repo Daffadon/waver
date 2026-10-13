@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config holds runtime settings. Env wins.
@@ -15,15 +16,40 @@ type Config struct {
 	TCPPort   string
 	DBPath    string
 	JWTSecret string
+
+	// Replication. All optional: with no peers configured this stays a single
+	// node that still records clocks, so enabling peers later needs no rewrite.
+	NodeID       string
+	Peers        []string
+	SyncSecret   string
+	SyncInterval time.Duration
+	CacheBytes   int
 }
 
 func LoadConfig() Config {
 	loadRootEnv()
-	port := getenv("PORT", "8080")
-	tcpPort := getenv("TCP_PORT", "9090")
-	db := getenv("DB_PATH", "./data/waver.db")
-	secret := os.Getenv("JWT_SECRET")
-	return Config{Port: port, TCPPort: tcpPort, DBPath: db, JWTSecret: secret}
+	return Config{
+		Port:         getenv("PORT", "8080"),
+		TCPPort:      getenv("TCP_PORT", "9090"),
+		DBPath:       getenv("DB_PATH", "./data/waver.db"),
+		JWTSecret:    os.Getenv("JWT_SECRET"),
+		NodeID:       os.Getenv("NODE_ID"),
+		Peers:        splitList(os.Getenv("PEERS")),
+		SyncSecret:   os.Getenv("SYNC_SECRET"),
+		SyncInterval: time.Duration(AtoiDefault(getenv("SYNC_INTERVAL_MS", "1000"), 1000)) * time.Millisecond,
+		CacheBytes:   AtoiDefault(getenv("CACHE_MB", "64"), 64) << 20,
+	}
+}
+
+// splitList parses a comma-separated env list, dropping blanks.
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // loadRootEnv reads KEY=VALUE lines from the repo-root .env.

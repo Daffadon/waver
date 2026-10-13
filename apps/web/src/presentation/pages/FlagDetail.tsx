@@ -12,7 +12,7 @@ import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/Stack";
 import { useToast } from "@astryxdesign/core/Toast";
-import { flagSchema, type Flag } from "../../domain/types";
+import { flagSchema, type Flag, type FlagInput } from "../../domain/types";
 import { datetimeLocalToUnix, unixToDatetimeLocal } from "../../data/client";
 import { useFlagMutations, useFlags } from "../../app/hooks";
 import { Page, PageHeader } from "../components/Page";
@@ -67,7 +67,7 @@ const newDraft: Draft = {
 // parsed payload, so Save stays a two-branch call.
 function validate(draft: Draft, routeKey: string | undefined) {
   const errors: Partial<Record<DraftField, string>> = {};
-  let payload: Omit<Flag, "version" | "updated_at"> | null = null;
+  let payload: FlagInput | null = null;
 
   let rules: unknown = [];
   try {
@@ -142,7 +142,7 @@ function FlagForm({
     if (!payload) return;
     try {
       if (isNew) await create.mutateAsync(payload);
-      else await update.mutateAsync({ key: routeKey!, flag: payload });
+      else await update.mutateAsync({ key: routeKey!, flag: { ...payload, version: existing!.version } });
       showToast({ body: isNew ? `Created ${payload.key}` : `Saved ${routeKey}` });
       nav("/");
     } catch (e) {

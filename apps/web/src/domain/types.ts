@@ -47,6 +47,10 @@ export const apiKeySchema = z.object({ name: z.string().min(1).max(64) });
 
 export type Rule = z.infer<typeof ruleSchema>;
 export type Flag = z.infer<typeof flagSchema> & { version: number; updated_at: number };
+// FlagInput is a flag as the admin API accepts it. version, when present, is the
+// revision the editor loaded: the API answers 409 instead of silently overwriting
+// a newer change that arrived from another node.
+export type FlagInput = z.infer<typeof flagSchema> & { version?: number };
 export type ApiKey = {
   id: string;
   prefix: string;

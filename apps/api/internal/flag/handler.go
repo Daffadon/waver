@@ -2,12 +2,13 @@ package flag
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
 
-	"github.com/go-playground/validator/v10"
 	"github.com/daffadon/waver/internal/shared"
+	"github.com/go-playground/validator/v10"
 )
 
 var validate = validator.New()
@@ -24,6 +25,29 @@ type flagDTO struct {
 	Rules        []Rule `json:"rules"`
 	StartsAt     *int64 `json:"starts_at"`
 	EndsAt       *int64 `json:"ends_at"`
+	// Version is the revision the caller edited from, not a value it sets. Omit
+	// it for last-writer-wins; send it to get a 409 instead of a silent overwrite
+	// when another node changed the flag first.
+	Version *int64 `json:"version"`
+}
+
+// save writes the flag through the register and maps a stale base revision to a
+// 409 instead of an overwrite.
+func (h *Handler) save(w http.ResponseWriter, f Flag, base *int64, code int) {
+	var b int64
+	if base != nil {
+		b = *base
+	}
+	saved, err := h.Store.Upsert(f, b)
+	switch {
+	case errors.Is(err, ErrConflict):
+		shared.WriteErr(w, 409, err.Error())
+	case err != nil:
+		slog.Error("flag save failed", "key", f.Key, "err", err)
+		shared.WriteErr(w, 500, "db error")
+	default:
+		shared.WriteJSON(w, code, saved)
+	}
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
@@ -79,13 +103,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if _, ok := raw["enabled"]; ok {
 		f.Enabled = in.Enabled
 	}
-	if err := h.Store.Upsert(f); err != nil {
-		slog.Error("flag save failed", "key", f.Key, "err", err)
-		shared.WriteErr(w, 500, "db error")
-		return
-	}
-	saved, _ := h.Store.Get(f.Key)
-	shared.WriteJSON(w, 201, saved)
+	h.save(w, f, in.Version, 201)
 }
 
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
@@ -114,19 +132,17 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	f := Flag{Key: key, Name: in.Name, Description: in.Description, Enabled: in.Enabled,
 		DefaultValue: in.DefaultValue, Rules: nonNil(in.Rules), StartsAt: in.StartsAt, EndsAt: in.EndsAt}
-	if err := h.Store.Upsert(f); err != nil {
-		slog.Error("flag save failed", "key", key, "err", err)
-		shared.WriteErr(w, 500, "db error")
-		return
-	}
-	saved, _ := h.Store.Get(key)
-	shared.WriteJSON(w, 200, saved)
+	h.save(w, f, in.Version, 200)
 }
 
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(r.URL.Path, "/api/v1/flags/")
 	if key == "" {
 		shared.WriteErr(w, 400, "key required")
+		return
+	}
+	if err := ValidateKey(key); err != nil {
+		shared.WriteErr(w, 400, err.Error())
 		return
 	}
 	if err := h.Store.Delete(key); err != nil {

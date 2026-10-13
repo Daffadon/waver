@@ -1,5 +1,5 @@
 // data layer: single fetch client + repository functions.
-import type { ApiKey, Flag } from '../domain/types';
+import type { ApiKey, Flag, FlagInput } from '../domain/types';
 
 const TOKEN_KEY = 'waver.jwt';
 
@@ -28,9 +28,9 @@ export const authRepo = {
 
 export const flagRepo = {
   list: () => req<{ flags: Flag[] }>('/api/v1/flags'),
-  create: (f: Omit<Flag, 'version' | 'updated_at'>) =>
+  create: (f: FlagInput) =>
     req<Flag>('/api/v1/flags', { method: 'POST', body: JSON.stringify(f) }),
-  update: (key: string, f: Omit<Flag, 'version' | 'updated_at'>) =>
+  update: (key: string, f: FlagInput) =>
     req<Flag>(`/api/v1/flags/${key}`, { method: 'PATCH', body: JSON.stringify(f) }),
   remove: (key: string) => req<{ status: string }>(`/api/v1/flags/${key}`, { method: 'DELETE' }),
 };

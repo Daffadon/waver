@@ -4,11 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
+
+	"github.com/daffadon/waver/internal/sync"
 )
 
 // Server serves the whole HTTP API over raw TCP. JSON lines: one line in, one line out.
@@ -29,12 +33,34 @@ import (
 //
 // token is the admin JWT for /api/v1/*; api_key is the key for /ofrep/*.
 //
+// Replication frames share this port and are routed to Sync, authenticated by
+// their own MAC instead of a JWT:
+//
+//	{"type":"sync_digest",...} -> {"type":"sync_digest_reply",...}
+//
+// min_revision on an eval line becomes the X-Waver-Min-Rev fence:
+//
+//	{"api_key":"wv_...","key":"my-flag","context":{...},"min_revision":42}
+//
 // ponytail: admin JWT and login passwords now cross plaintext TCP. Keep TCP on a
 // trusted LAN; add TLS or disable admin routes on TCP before this leaves the VPC.
-// ponytail: 1MB line cap, raise if bodies grow large.
 type Server struct {
 	Handler http.Handler
+	// Sync handles replication frames. Nil means this node is single-node and
+	// replication lines are refused.
+	Sync Sync
 }
+
+// Sync is the replication half of the TCP port, implemented by internal/sync.
+type Sync interface {
+	// Frame handles one inbound replication line, reporting whether the line was
+	// a replication frame at all.
+	Frame(raw []byte) (any, bool)
+}
+
+// maxLine caps one protocol line. A state push carries every flag, so this is
+// the ceiling on a full replication frame.
+const maxLine = 8 << 20
 
 type request struct {
 	Type    string          `json:"type"`
@@ -45,6 +71,7 @@ type request struct {
 	Key     string          `json:"key"`
 	Context map[string]any  `json:"context"`
 	Body    json.RawMessage `json:"body"`
+	MinRev  int64           `json:"min_revision"`
 }
 
 // Serve listens on :port. One goroutine per conn. Blocks.
@@ -54,9 +81,17 @@ func (s *Server) Serve(port string) error {
 		return err
 	}
 	slog.Info("tcp listening", "port", port)
+	return s.ServeOn(ln)
+}
+
+// ServeOn serves an already open listener, which tests use to pick a port.
+func (s *Server) ServeOn(ln net.Listener) error {
 	for {
 		c, err := ln.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
 			slog.Warn("tcp accept failed", "err", err)
 			continue
 		}
@@ -74,7 +109,7 @@ func (s *Server) handle(c net.Conn) {
 		if err != nil {
 			return
 		}
-		if len(line) > 1<<20 {
+		if len(line) > maxLine {
 			_ = writeJSON(w, map[string]string{"error": "line too large"})
 			_ = w.Flush()
 			return
@@ -96,6 +131,13 @@ func (s *Server) handleLine(line []byte) any {
 	if in.Type == "ping" {
 		return map[string]string{"status": "ok"}
 	}
+	if sync.IsFrame(in.Type) {
+		if s.Sync == nil {
+			return map[string]string{"error": "replication disabled"}
+		}
+		resp, _ := s.Sync.Frame(line)
+		return resp
+	}
 	method, path, body, bearer := route(in)
 	req, err := http.NewRequest(method, path, body)
 	if err != nil {
@@ -104,6 +146,9 @@ func (s *Server) handleLine(line []byte) any {
 	req.Header.Set("Content-Type", "application/json")
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	if in.MinRev > 0 {
+		req.Header.Set("X-Waver-Min-Rev", strconv.FormatInt(in.MinRev, 10))
 	}
 	rec := &recorder{header: http.Header{}, code: http.StatusOK}
 	s.Handler.ServeHTTP(rec, req)
